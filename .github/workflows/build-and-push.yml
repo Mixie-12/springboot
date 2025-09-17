@@ -1,9 +1,11 @@
 name: Build & Push to Artifact Registry
 
 on:
-  push:          # runs on ANY branch push
-    branches: ["**"]
-  workflow_dispatch: {}   # manual run button
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -19,20 +21,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: ✅ Workflow started
-        run: echo "Started on ${{ github.ref }} (event: ${{ github.event_name }})"
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Quick diagnostics (booleans only; no secret values printed)
-      - name: 🔎 Check secrets presence
-        run: |
-          echo "WIF_PROVIDER set? ${{ secrets.GCP_WIF_PROVIDER != '' }}"
-          echo "SA_EMAIL set?     ${{ secrets.GCP_SA_EMAIL != '' }}"
-          echo "PROJECT_ID set?   ${{ secrets.GCP_PROJECT_ID != '' }}"
-
-      - name: Set up JDK (for Spring Boot jar)
+      # If your Dockerfile expects a built JAR in target/, build it first.
+      # Safe to keep—no harm if your Dockerfile does its own mvn build.
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -68,5 +62,6 @@ jobs:
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
 
-      - name: ✅ Done
+      - name: Done
         run: echo "Pushed $IMAGE and $IMAGE_LATEST"
+
