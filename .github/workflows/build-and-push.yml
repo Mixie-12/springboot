@@ -24,9 +24,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # If your Dockerfile expects a built JAR in target/, build it first.
-      # Safe to keep—no harm if your Dockerfile does its own mvn build.
+      # Quick diagnostics (booleans only)
+      - name: Check secrets presence
+        run: |
+          echo "WIF_PROVIDER set? ${{ secrets.GCP_WIF_PROVIDER != '' }}"
+          echo "SA_EMAIL set?     ${{ secrets.GCP_SA_EMAIL != '' }}"
+          echo "PROJECT_ID set?   ${{ secrets.GCP_PROJECT_ID != '' }}"
+          echo "Event: ${{ github.event_name }}  Fork? ${{ github.event.pull_request.head.repo.fork || false }}"
+
+      # If PR from fork or secrets missing, do a dry build only to validate Dockerfile/Maven
+      - name: PR dry build (no push)
+        if: ${{ github.event_name == 'pull_request' && (secrets.GCP_WIF_PROVIDER == '' || secrets.GCP_SA_EMAIL == '' || secrets.GCP_PROJECT_ID == '') }}
+        run: |
+          echo "Secrets not available on PR from fork; doing dry build."
+          mvn -B -DskipTests package
+          docker build -t test -f Dockerfile .
+
+      # Fail early if we need to push but secrets are missing
+      - name: Validate required secrets
+        if: ${{ github.event_name != 'pull_request' && (secrets.GCP_WIF_PROVIDER == '' || secrets.GCP_SA_EMAIL == '' || secrets.GCP_PROJECT_ID == '') }}
+        run: |
+          echo "ERROR: Required secrets missing. Add GCP_WIF_PROVIDER, GCP_SA_EMAIL, GCP_PROJECT_ID under Actions > Secrets."
+          exit 1
+
       - name: Set up JDK
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -34,9 +56,11 @@ jobs:
           cache: maven
 
       - name: Build JAR (skip tests)
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: mvn -B -DskipTests package
 
       - name: Auth to GCP (OIDC/WIF)
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
@@ -44,12 +68,15 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Setup gcloud
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for GAR
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
 
       - name: Build image
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: |
           IMAGE_BASE="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}"
           GIT_SHA="${{ github.sha }}"
@@ -58,10 +85,11 @@ jobs:
           echo "IMAGE_LATEST=$IMAGE_BASE:latest" >> $GITHUB_ENV
 
       - name: Push image
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: |
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
 
       - name: Done
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: echo "Pushed $IMAGE and $IMAGE_LATEST"
-
