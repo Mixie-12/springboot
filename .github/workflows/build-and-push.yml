@@ -2,21 +2,14 @@ name: Build & Push to Artifact Registry
 
 on:
   push:
-    branches: ["**"]           # run on any branch
-    paths:
-      - "app/**"
-      - ".github/workflows/build-and-push.yml"
+    branches: ["main"]
   pull_request:
-    branches: ["**"]
+    branches: ["main"]
   workflow_dispatch: {}
 
 permissions:
   contents: read
-  id-token: write   # required for OIDC to GCP
-
-concurrency:
-  group: build-push-${{ github.ref }}
-  cancel-in-progress: false
+  id-token: write
 
 env:
   REGION: ${{ vars.REGION || 'europe-north1' }}
@@ -27,23 +20,23 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
-    # Skip pushing if secrets aren't present (e.g., PRs from forks), but still allow PR dry builds
-    if: ${{ github.event_name != 'pull_request' || (secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '') }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # If this is a PR and secrets are missing (fork), just try a dry build to catch Dockerfile errors
-      - name: PR dry build (no push)
-        if: ${{ github.event_name == 'pull_request' && (secrets.GCP_WIF_PROVIDER == '' || secrets.GCP_SA_EMAIL == '' || secrets.GCP_PROJECT_ID == '') }}
-        run: |
-          echo "PR from fork or secrets missing; doing a dry build only."
-          docker build -f app/Dockerfile app
+      # If your Dockerfile expects a built JAR in target/, build it first.
+      # Safe to keep—no harm if your Dockerfile does its own mvn build.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
 
-      # --- Auth & push only when secrets exist ---
+      - name: Build JAR (skip tests)
+        run: mvn -B -DskipTests package
+
       - name: Auth to GCP (OIDC/WIF)
-        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
@@ -51,30 +44,24 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Setup gcloud
-        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker to use GAR
-        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
+      - name: Configure Docker for GAR
         run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
 
       - name: Build image
-        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: |
-          set -euo pipefail
           IMAGE_BASE="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}"
           GIT_SHA="${{ github.sha }}"
-          docker build -t "$IMAGE_BASE:$GIT_SHA" -t "$IMAGE_BASE:latest" -f app/Dockerfile app
+          docker build -t "$IMAGE_BASE:$GIT_SHA" -t "$IMAGE_BASE:latest" -f Dockerfile .
           echo "IMAGE=$IMAGE_BASE:$GIT_SHA" >> $GITHUB_ENV
           echo "IMAGE_LATEST=$IMAGE_BASE:latest" >> $GITHUB_ENV
 
       - name: Push image
-        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: |
-          set -euo pipefail
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
 
-      - name: Print image name
-        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
+      - name: Done
         run: echo "Pushed $IMAGE and $IMAGE_LATEST"
+
