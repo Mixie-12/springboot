@@ -23,7 +23,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
+      - name: 🔎 Check secrets presence
+        run: |
+          echo "WIF_PROVIDER set? ${{ secrets.GCP_WIF_PROVIDER != '' }}"
+          echo "SA_EMAIL set?     ${{ secrets.GCP_SA_EMAIL != '' }}"
+          echo "PROJECT_ID set?   ${{ secrets.GCP_PROJECT_ID != '' }}"
       # If your Dockerfile expects a built JAR in target/, build it first.
       # Safe to keep—no harm if your Dockerfile does its own mvn build.
       - name: Set up JDK
