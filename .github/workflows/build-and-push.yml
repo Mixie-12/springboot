@@ -2,9 +2,12 @@ name: Build & Push to Artifact Registry
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["**"]           # run on any branch
+    paths:
+      - "app/**"
+      - ".github/workflows/build-and-push.yml"
   pull_request:
-    branches: [ "main" ]
+    branches: ["**"]
   workflow_dispatch: {}
 
 permissions:
@@ -24,25 +27,21 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
-    # Skip if secrets aren’t present (e.g., PRs from forks). Still runs on pushes/workflow_dispatch.
-    if: ${{ (secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '') || github.event_name == 'pull_request' }}
-
-    outputs:
-      image_sha: ${{ steps.meta.outputs.image_sha }}
-      image_latest: ${{ steps.meta.outputs.image_latest }}
+    # Skip pushing if secrets aren't present (e.g., PRs from forks), but still allow PR dry builds
+    if: ${{ github.event_name != 'pull_request' || (secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '') }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # If this is a PR from a fork, just do a build check (no auth, no push)
-      - name: PR build (no push)
+      # If this is a PR and secrets are missing (fork), just try a dry build to catch Dockerfile errors
+      - name: PR dry build (no push)
         if: ${{ github.event_name == 'pull_request' && (secrets.GCP_WIF_PROVIDER == '' || secrets.GCP_SA_EMAIL == '' || secrets.GCP_PROJECT_ID == '') }}
         run: |
           echo "PR from fork or secrets missing; doing a dry build only."
           docker build -f app/Dockerfile app
 
-      # --- Auth only when secrets exist (pushes, workflow_dispatch, or PRs from same repo) ---
+      # --- Auth & push only when secrets exist ---
       - name: Auth to GCP (OIDC/WIF)
         if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/auth@v2
@@ -78,8 +77,4 @@ jobs:
 
       - name: Print image name
         if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
-        id: meta
-        run: |
-          echo "Pushed $IMAGE and $IMAGE_LATEST"
-          echo "image_sha=$IMAGE" >> $GITHUB_OUTPUT
-          echo "image_latest=$IMAGE_LATEST" >> $GITHUB_OUTPUT
+        run: echo "Pushed $IMAGE and $IMAGE_LATEST"
