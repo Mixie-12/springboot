@@ -12,7 +12,7 @@ public class DemoApplication {
 
     @GetMapping("/")
     public String hello() {
-        return "Hello from Spring Boot on GKE!";
+        return "Hello World, compiled from the pipeline!";
     }
 
     public static void main(String[] args) {
