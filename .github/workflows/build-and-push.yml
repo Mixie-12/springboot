@@ -11,6 +11,10 @@ permissions:
   contents: read
   id-token: write   # required for OIDC to GCP
 
+concurrency:
+  group: build-push-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGION: ${{ vars.REGION || 'europe-north1' }}
   GAR_REPO: ${{ vars.GAR_REPO || 'spring-demo' }}
@@ -20,12 +24,27 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
+    # Skip if secrets aren’t present (e.g., PRs from forks). Still runs on pushes/workflow_dispatch.
+    if: ${{ (secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '') || github.event_name == 'pull_request' }}
+
+    outputs:
+      image_sha: ${{ steps.meta.outputs.image_sha }}
+      image_latest: ${{ steps.meta.outputs.image_latest }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Authenticate to GCP via OIDC (no long-lived JSON key!)
-      - name: Auth to GCP
+      # If this is a PR from a fork, just do a build check (no auth, no push)
+      - name: PR build (no push)
+        if: ${{ github.event_name == 'pull_request' && (secrets.GCP_WIF_PROVIDER == '' || secrets.GCP_SA_EMAIL == '' || secrets.GCP_PROJECT_ID == '') }}
+        run: |
+          echo "PR from fork or secrets missing; doing a dry build only."
+          docker build -f app/Dockerfile app
+
+      # --- Auth only when secrets exist (pushes, workflow_dispatch, or PRs from same repo) ---
+      - name: Auth to GCP (OIDC/WIF)
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
@@ -33,26 +52,34 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Setup gcloud
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker to use GAR
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
 
-      # Build & tag
-      # Adjust context/Dockerfile path: here we build the Spring app under ./app using app/Dockerfile
       - name: Build image
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: |
+          set -euo pipefail
           IMAGE_BASE="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}"
           GIT_SHA="${{ github.sha }}"
-          DATE_TAG="$(date +'%Y%m%d-%H%M%S')"
           docker build -t "$IMAGE_BASE:$GIT_SHA" -t "$IMAGE_BASE:latest" -f app/Dockerfile app
           echo "IMAGE=$IMAGE_BASE:$GIT_SHA" >> $GITHUB_ENV
           echo "IMAGE_LATEST=$IMAGE_BASE:latest" >> $GITHUB_ENV
 
       - name: Push image
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
         run: |
+          set -euo pipefail
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
 
       - name: Print image name
-        run: echo "Pushed $IMAGE and $IMAGE_LATEST"
+        if: ${{ secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_SA_EMAIL != '' && secrets.GCP_PROJECT_ID != '' }}
+        id: meta
+        run: |
+          echo "Pushed $IMAGE and $IMAGE_LATEST"
+          echo "image_sha=$IMAGE" >> $GITHUB_OUTPUT
+          echo "image_latest=$IMAGE_LATEST" >> $GITHUB_OUTPUT
