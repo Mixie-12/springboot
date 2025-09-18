@@ -1,4 +1,4 @@
-name: Build, Push & Deploy to GKE
+name: Build & Push to Artifact Registry
 
 on:
   push:
@@ -16,28 +16,20 @@ env:
   GAR_REPO: ${{ vars.GAR_REPO || 'spring-demo' }}
   IMAGE_NAME: ${{ vars.IMAGE_NAME || 'demo' }}
 
-  # --- K8s/GKE deploy settings (override via Repository Variables) ---
-  GKE_CLUSTER: ${{ vars.GKE_CLUSTER || 'my-gke-cluster' }}
-  GKE_LOCATION: ${{ vars.GKE_LOCATION || 'europe-north1' }} # zone or region
-  K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'default' }}
-  DEPLOYMENT_NAME: ${{ vars.DEPLOYMENT_NAME || 'demo' }}    # k8s Deployment name
-  CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'demo' }}      # container name inside the Deployment
-
 jobs:
-  build-push-deploy:
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: 🔎 Check secrets presence
         run: |
           echo "WIF_PROVIDER set? ${{ secrets.GCP_WIF_PROVIDER != '' }}"
           echo "SA_EMAIL set?     ${{ secrets.GCP_SA_EMAIL != '' }}"
           echo "PROJECT_ID set?   ${{ secrets.GCP_PROJECT_ID != '' }}"
-
       # If your Dockerfile expects a built JAR in target/, build it first.
+      # Safe to keep—no harm if your Dockerfile does its own mvn build.
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -74,27 +66,5 @@ jobs:
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
 
-      # ---- KUBERNETES REDEPLOY ----
-      - name: Get GKE credentials
-        uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: ${{ env.GKE_CLUSTER }}
-          location: ${{ env.GKE_LOCATION }}
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Deploy to Kubernetes (set image to new SHA)
-        env:
-          IMAGE: ${{ env.IMAGE }}
-          K8S_NAMESPACE: ${{ env.K8S_NAMESPACE }}
-          DEPLOYMENT_NAME: ${{ env.DEPLOYMENT_NAME }}
-          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
-        run: |
-          # Update the Deployment to use the freshly-pushed SHA-tagged image
-          kubectl -n "$K8S_NAMESPACE" set image deployment/"$DEPLOYMENT_NAME" "$CONTAINER_NAME"="$IMAGE" --record
-          # Wait for rollout to complete (fail the job if it doesn't)
-          kubectl -n "$K8S_NAMESPACE" rollout status deployment/"$DEPLOYMENT_NAME" --timeout=5m
-
       - name: Done
-        run: |
-          echo "Pushed $IMAGE and $IMAGE_LATEST"
-          echo "Updated deployment '${{ env.DEPLOYMENT_NAME }}' in '${{ env.K8S_NAMESPACE }}' to image: $IMAGE"
+        run: echo "Pushed $IMAGE and $IMAGE_LATEST"
